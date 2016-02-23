@@ -261,14 +261,14 @@ func TestPassingBothCLIArgWorked(t *testing.T) {
 	assert.Equal(t, "123", driver.SecretKey)
 }
 
-var values = []string {
+var values = []string{
 	"bob",
 	"jake",
 	"jill",
 }
 
 var pointerSliceTests = []struct {
-	input []string
+	input    []string
 	expected []*string
 }{
 	{[]string{}, []*string{}},

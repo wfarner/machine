@@ -225,14 +225,14 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 func NewDriver(hostName, storePath string) *Driver {
 	id := generateId()
 	driver := &Driver{
-		Id:                id,
-		AMI:               defaultAmiId,
-		Region:            defaultRegion,
-		InstanceType:      defaultInstanceType,
-		RootSize:          defaultRootSize,
-		Zone:              defaultZone,
+		Id:                 id,
+		AMI:                defaultAmiId,
+		Region:             defaultRegion,
+		InstanceType:       defaultInstanceType,
+		RootSize:           defaultRootSize,
+		Zone:               defaultZone,
 		SecurityGroupNames: []string{defaultSecurityGroup},
-		SpotPrice:         defaultSpotPrice,
+		SpotPrice:          defaultSpotPrice,
 		BaseDriver: &drivers.BaseDriver{
 			SSHUser:     defaultSSHUser,
 			MachineName: hostName,
