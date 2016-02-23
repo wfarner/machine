@@ -450,7 +450,7 @@ func (d *Driver) instanceIpAvailable() bool {
 
 func makePointerSlice(stackSlice []string) []*string {
 	pointerSlice := []*string{}
-	for i, _ := range stackSlice {
+	for i := range stackSlice {
 		pointerSlice = append(pointerSlice, &stackSlice[i])
 	}
 	return pointerSlice
