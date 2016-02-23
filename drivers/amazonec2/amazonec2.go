@@ -910,9 +910,9 @@ func (d *Driver) configureSecurityGroups(groupNames []string) error {
 		} else {
 			log.Debugf("creating security group (%s) in %s", groupName, d.VpcId)
 			groupResp, err := d.getClient().CreateSecurityGroup(&ec2.CreateSecurityGroupInput{
-				GroupName:   &groupName,
+				GroupName:   aws.String(groupName),
 				Description: aws.String("Docker Machine"),
-				VpcId:       &d.VpcId,
+				VpcId:       aws.String(d.VpcId),
 			})
 			if err != nil {
 				return err

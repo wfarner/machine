@@ -4,17 +4,19 @@ import (
 	"testing"
 
 	"errors"
+	"reflect"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/docker/machine/commands/commandstest"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
 const (
-	testSSHPort    = 22
-	testDockerPort = 2376
-	testSwarmPort  = 3376
+	testSSHPort    = int64(22)
+	testDockerPort = int64(2376)
+	testSwarmPort  = int64(3376)
 )
 
 var (
@@ -281,4 +283,79 @@ func TestMakePointerSlice(t *testing.T) {
 		actual := makePointerSlice(tt.input)
 		assert.Equal(t, tt.expected, actual)
 	}
+}
+
+func matchGroupLookup(expected []string) interface{} {
+	return func(input *ec2.DescribeSecurityGroupsInput) bool {
+		actual := []string{}
+		for _, filter := range input.Filters {
+			if *filter.Name == "group-name" {
+				for _, groupName := range filter.Values {
+					actual = append(actual, *groupName)
+				}
+			}
+		}
+		return reflect.DeepEqual(expected, actual)
+	}
+}
+
+func ipPermission(port int64) *ec2.IpPermission {
+	return &ec2.IpPermission{
+		FromPort:   aws.Int64(port),
+		ToPort:     aws.Int64(port),
+		IpProtocol: aws.String("tcp"),
+		IpRanges:   []*ec2.IpRange{{CidrIp: aws.String(ipRange)}},
+	}
+}
+
+func TestConfigureSecurityGroups(t *testing.T) {
+	groups := []string{"existingGroup", "newGroup"}
+	recorder := fakeEC2SecurityGroupTestRecorder{}
+
+	// First, a check is made for which groups already exist.
+	initialLookupResult := ec2.DescribeSecurityGroupsOutput{SecurityGroups: []*ec2.SecurityGroup{
+		{
+			GroupName:     aws.String("existingGroup"),
+			GroupId:       aws.String("existingGroupId"),
+			IpPermissions: []*ec2.IpPermission{ipPermission(testSSHPort)},
+		},
+	}}
+	recorder.On("DescribeSecurityGroups", mock.MatchedBy(matchGroupLookup(groups))).Return(
+		&initialLookupResult, nil)
+
+	// An ingress permission is added to the existing group.
+	recorder.On("AuthorizeSecurityGroupIngress", &ec2.AuthorizeSecurityGroupIngressInput{
+		GroupId:       aws.String("existingGroupId"),
+		IpPermissions: []*ec2.IpPermission{ipPermission(testDockerPort)},
+	}).Return(
+		&ec2.AuthorizeSecurityGroupIngressOutput{}, nil)
+
+	// The new security group is created.
+	recorder.On("CreateSecurityGroup", &ec2.CreateSecurityGroupInput{
+		GroupName:   aws.String("newGroup"),
+		Description: aws.String("Docker Machine"),
+		VpcId:       aws.String(""),
+	}).Return(
+		&ec2.CreateSecurityGroupOutput{GroupId: aws.String("newGroupId")}, nil)
+
+	// Ensuring the new security group exists.
+	postCreateLookupResult := ec2.DescribeSecurityGroupsOutput{SecurityGroups: []*ec2.SecurityGroup{
+		{
+			GroupName: aws.String("newGroup"),
+			GroupId:   aws.String("newGroupId"),
+		},
+	}}
+	recorder.On("DescribeSecurityGroups",
+		&ec2.DescribeSecurityGroupsInput{GroupIds: []*string{aws.String("newGroupId")}}).Return(
+		&postCreateLookupResult, nil)
+
+	// Permissions are added to the new security group.
+	recorder.On("AuthorizeSecurityGroupIngress", &ec2.AuthorizeSecurityGroupIngressInput{
+		GroupId:       aws.String("newGroupId"),
+		IpPermissions: []*ec2.IpPermission{ipPermission(testSSHPort), ipPermission(testDockerPort)},
+	}).Return(
+		&ec2.AuthorizeSecurityGroupIngressOutput{}, nil)
+
+	driver := NewCustomTestDriver(&recorder)
+	driver.configureSecurityGroups(groups)
 }

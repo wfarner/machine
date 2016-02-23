@@ -5,6 +5,8 @@ import (
 
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/service/ec2"
+
+	"github.com/stretchr/testify/mock"
 )
 
 type fakeEC2 struct {
@@ -65,7 +67,9 @@ type fakeEC2WithDescribe struct {
 	err    error
 }
 
-func (f *fakeEC2WithDescribe) DescribeAccountAttributes(input *ec2.DescribeAccountAttributesInput) (*ec2.DescribeAccountAttributesOutput, error) {
+func (f *fakeEC2WithDescribe) DescribeAccountAttributes(
+	input *ec2.DescribeAccountAttributesInput) (*ec2.DescribeAccountAttributesOutput, error) {
+
 	return f.output, f.err
 }
 
@@ -73,7 +77,9 @@ type fakeEC2WithLogin struct {
 	*fakeEC2
 }
 
-func (f *fakeEC2WithLogin) DescribeAccountAttributes(input *ec2.DescribeAccountAttributesInput) (*ec2.DescribeAccountAttributesOutput, error) {
+func (f *fakeEC2WithLogin) DescribeAccountAttributes(
+	input *ec2.DescribeAccountAttributesInput) (*ec2.DescribeAccountAttributesOutput, error) {
+
 	defaultVpc := "default-vpc"
 	vpcName := "vpc-9999"
 
@@ -87,6 +93,35 @@ func (f *fakeEC2WithLogin) DescribeAccountAttributes(input *ec2.DescribeAccountA
 			},
 		},
 	}, nil
+}
+
+type fakeEC2SecurityGroupTestRecorder struct {
+	*fakeEC2
+	mock.Mock
+}
+
+func (f *fakeEC2SecurityGroupTestRecorder) DescribeSecurityGroups(
+	input *ec2.DescribeSecurityGroupsInput) (*ec2.DescribeSecurityGroupsOutput, error) {
+
+	result := f.Called(input)
+	value, _ := result.Get(0).(*ec2.DescribeSecurityGroupsOutput)
+	return value, result.Error(1)
+}
+
+func (f *fakeEC2SecurityGroupTestRecorder) CreateSecurityGroup(
+	input *ec2.CreateSecurityGroupInput) (*ec2.CreateSecurityGroupOutput, error) {
+
+	result := f.Called(input)
+	value, _ := result.Get(0).(*ec2.CreateSecurityGroupOutput)
+	return value, result.Error(1)
+}
+
+func (f *fakeEC2SecurityGroupTestRecorder) AuthorizeSecurityGroupIngress(
+	input *ec2.AuthorizeSecurityGroupIngressInput) (*ec2.AuthorizeSecurityGroupIngressOutput, error) {
+
+	result := f.Called(input)
+	value, _ := result.Get(0).(*ec2.AuthorizeSecurityGroupIngressOutput)
+	return value, result.Error(1)
 }
 
 func NewTestDriver() *Driver {
