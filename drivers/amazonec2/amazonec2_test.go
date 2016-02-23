@@ -260,3 +260,25 @@ func TestPassingBothCLIArgWorked(t *testing.T) {
 	assert.Equal(t, "foobar", driver.AccessKey)
 	assert.Equal(t, "123", driver.SecretKey)
 }
+
+var values = []string {
+	"bob",
+	"jake",
+	"jill",
+}
+
+var pointerSliceTests = []struct {
+	input []string
+	expected []*string
+}{
+	{[]string{}, []*string{}},
+	{[]string{values[1]}, []*string{&values[1]}},
+	{[]string{values[0], values[2], values[2]}, []*string{&values[0], &values[2], &values[2]}},
+}
+
+func TestMakePointerSlice(t *testing.T) {
+	for _, tt := range pointerSliceTests {
+		actual := makePointerSlice(tt.input)
+		assert.Equal(t, tt.expected, actual)
+	}
+}

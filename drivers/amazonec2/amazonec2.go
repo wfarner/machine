@@ -68,8 +68,8 @@ type Driver struct {
 	InstanceId              string
 	InstanceType            string
 	PrivateIPAddress        string
-	SecurityGroupId         string
-	SecurityGroupName       string
+	SecurityGroupIds        []string
+	SecurityGroupNames      []string
 	Tags                    string
 	ReservationId           string
 	DeviceName              string
@@ -138,10 +138,10 @@ func (d *Driver) GetCreateFlags() []mcnflag.Flag {
 			Usage:  "AWS VPC subnet id",
 			EnvVar: "AWS_SUBNET_ID",
 		},
-		mcnflag.StringFlag{
+		mcnflag.StringSliceFlag{
 			Name:   "amazonec2-security-group",
 			Usage:  "AWS VPC security group",
-			Value:  defaultSecurityGroup,
+			Value:  []string{defaultSecurityGroup},
 			EnvVar: "AWS_SECURITY_GROUP",
 		},
 		mcnflag.StringFlag{
@@ -231,7 +231,7 @@ func NewDriver(hostName, storePath string) *Driver {
 		InstanceType:      defaultInstanceType,
 		RootSize:          defaultRootSize,
 		Zone:              defaultZone,
-		SecurityGroupName: defaultSecurityGroup,
+		SecurityGroupNames: []string{defaultSecurityGroup},
 		SpotPrice:         defaultSpotPrice,
 		BaseDriver: &drivers.BaseDriver{
 			SSHUser:     defaultSSHUser,
@@ -282,7 +282,7 @@ func (d *Driver) SetConfigFromFlags(flags drivers.DriverOptions) error {
 	d.InstanceType = flags.String("amazonec2-instance-type")
 	d.VpcId = flags.String("amazonec2-vpc-id")
 	d.SubnetId = flags.String("amazonec2-subnet-id")
-	d.SecurityGroupName = flags.String("amazonec2-security-group")
+	d.SecurityGroupNames = flags.StringSlice("amazonec2-security-group")
 	d.Tags = flags.String("amazonec2-tags")
 	zone := flags.String("amazonec2-zone")
 	d.Zone = zone[:]
@@ -448,6 +448,14 @@ func (d *Driver) instanceIpAvailable() bool {
 	return false
 }
 
+func makePointerSlice(stackSlice []string) []*string {
+	pointerSlice := []*string{}
+	for i, _ := range stackSlice {
+		pointerSlice = append(pointerSlice, &stackSlice[i])
+	}
+	return pointerSlice
+}
+
 func (d *Driver) Create() error {
 	if err := d.checkPrereqs(); err != nil {
 		return err
@@ -459,7 +467,7 @@ func (d *Driver) Create() error {
 		return fmt.Errorf("unable to create key pair: %s", err)
 	}
 
-	if err := d.configureSecurityGroup(d.SecurityGroupName); err != nil {
+	if err := d.configureSecurityGroups(d.SecurityGroupNames); err != nil {
 		return err
 	}
 
@@ -471,9 +479,10 @@ func (d *Driver) Create() error {
 			DeleteOnTermination: aws.Bool(true),
 		},
 	}
+	var gids = makePointerSlice(d.SecurityGroupIds)
 	netSpecs := []*ec2.InstanceNetworkInterfaceSpecification{{
 		DeviceIndex:              aws.Int64(0), // eth0
-		Groups:                   []*string{&d.SecurityGroupId},
+		Groups:                   gids,
 		SubnetId:                 &d.SubnetId,
 		AssociatePublicIpAddress: aws.Bool(!d.PrivateIPOnly),
 	}}
@@ -866,14 +875,14 @@ func (d *Driver) configureTags(tagGroups string) error {
 	return nil
 }
 
-func (d *Driver) configureSecurityGroup(groupName string) error {
+func (d *Driver) configureSecurityGroups(groupNames []string) error {
 	log.Debugf("configuring security group in %s", d.VpcId)
 
-	var group *ec2.SecurityGroup
+	var gn = makePointerSlice(groupNames)
 	filters := []*ec2.Filter{
 		{
 			Name:   aws.String("group-name"),
-			Values: []*string{&groupName},
+			Values: gn,
 		},
 		{
 			Name:   aws.String("vpc-id"),
@@ -887,47 +896,52 @@ func (d *Driver) configureSecurityGroup(groupName string) error {
 		return err
 	}
 
-	if len(groups.SecurityGroups) > 0 {
-		log.Debugf("found existing security group (%s) in %s", groupName, d.VpcId)
-		group = groups.SecurityGroups[0]
+	var groupsByName = make(map[string]*ec2.SecurityGroup)
+	for _, securityGroup := range groups.SecurityGroups {
+		groupsByName[*securityGroup.GroupName] = securityGroup
 	}
 
-	// if not found, create
-	if group == nil {
-		log.Debugf("creating security group (%s) in %s", groupName, d.VpcId)
-		groupResp, err := d.getClient().CreateSecurityGroup(&ec2.CreateSecurityGroupInput{
-			GroupName:   &groupName,
-			Description: aws.String("Docker Machine"),
-			VpcId:       &d.VpcId,
-		})
-		if err != nil {
-			return err
+	for _, groupName := range groupNames {
+		var group *ec2.SecurityGroup
+		securityGroup, ok := groupsByName[groupName]
+		if ok {
+			log.Debugf("found existing security group (%s) in %s", groupName, d.VpcId)
+			group = securityGroup
+		} else {
+			log.Debugf("creating security group (%s) in %s", groupName, d.VpcId)
+			groupResp, err := d.getClient().CreateSecurityGroup(&ec2.CreateSecurityGroupInput{
+				GroupName:   &groupName,
+				Description: aws.String("Docker Machine"),
+				VpcId:       &d.VpcId,
+			})
+			if err != nil {
+				return err
+			}
+			// Manually translate into the security group construct
+			group = &ec2.SecurityGroup{
+				GroupId:   groupResp.GroupId,
+				VpcId:     aws.String(d.VpcId),
+				GroupName: aws.String(groupName),
+			}
+			// wait until created (dat eventual consistency)
+			log.Debugf("waiting for group (%s) to become available", *group.GroupId)
+			if err := mcnutils.WaitFor(d.securityGroupAvailableFunc(*group.GroupId)); err != nil {
+				return err
+			}
 		}
-		// Manually translate into the security group construct
-		group = &ec2.SecurityGroup{
-			GroupId:   groupResp.GroupId,
-			VpcId:     aws.String(d.VpcId),
-			GroupName: aws.String(groupName),
-		}
-		// wait until created (dat eventual consistency)
-		log.Debugf("waiting for group (%s) to become available", *group.GroupId)
-		if err := mcnutils.WaitFor(d.securityGroupAvailableFunc(*group.GroupId)); err != nil {
-			return err
-		}
-	}
+		d.SecurityGroupIds = append(d.SecurityGroupIds, *group.GroupId)
 
-	d.SecurityGroupId = *group.GroupId
+		perms := d.configureSecurityGroupPermissions(group)
 
-	perms := d.configureSecurityGroupPermissions(group)
-
-	if len(perms) != 0 {
-		log.Debugf("authorizing group %s with permissions: %v", groupName, perms)
-		_, err := d.getClient().AuthorizeSecurityGroupIngress(&ec2.AuthorizeSecurityGroupIngressInput{
-			GroupId:       group.GroupId,
-			IpPermissions: perms,
-		})
-		if err != nil {
-			return err
+		if len(perms) != 0 {
+			log.Debugf("authorizing group %s with permissions: %v", groupNames, perms)
+			_, err := d.getClient().AuthorizeSecurityGroupIngress(&ec2.AuthorizeSecurityGroupIngressInput{
+				GroupId:       group.GroupId,
+				IpPermissions: perms,
+			})
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -983,19 +997,6 @@ func (d *Driver) configureSecurityGroupPermissions(group *ec2.SecurityGroup) []*
 	log.Debugf("configuring security group authorization for %s", ipRange)
 
 	return perms
-}
-
-func (d *Driver) deleteSecurityGroup() error {
-	log.Debugf("deleting security group %s", d.SecurityGroupId)
-
-	_, err := d.getClient().DeleteSecurityGroup(&ec2.DeleteSecurityGroupInput{
-		GroupId: &d.SecurityGroupId,
-	})
-	if err != nil {
-		return err
-	}
-
-	return nil
 }
 
 func (d *Driver) deleteKeyPair() error {
